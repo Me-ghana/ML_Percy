@@ -21,13 +21,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('geotiff_file', type=Path, help='Source GeoTIFF')
 parser.add_argument('waypoint_file', type=Path, help='Waypoints .geojson')
 parser.add_argument('-o', '--output', type=Path, default=Path('./tiles'), help='Tile output directory')
-parser.add_argument('-ts', '--tile-size', type=int, default=640, help='Tile size')
+parser.add_argument('-t', '--tile-size', type=int, default=640, help='Tile size')
 parser.add_argument('-p', '--preview', action='store_true', help='Preview tiles')
-parser.add_argument('-po', '--preview-only', action='store_true', help='Preview only. Implies -p.')
+parser.add_argument("-n", '--no-save', action='store_true', help="Do not save tiles")
 args = parser.parse_args()
-
-if args.preview_only:
-    args.preview = True
 
 # Open image
 src = rasterio.open(args.geotiff_file)
@@ -44,7 +41,7 @@ t_inv = Transformer.from_crs(crs, crs.geodetic_crs)
 def t_px(lon, lat):
     x, y = t.transform(lon, lat)
     row, col = src.index(x, y)
-    return col, row
+    return np.array([col, row])
 
 # Get range of waypoint coordinates
 with open(args.waypoint_file) as f:
@@ -89,7 +86,7 @@ if args.preview:
     def t_px_preview_win(lon, lat):
         x, y = t.transform(lon, lat)
         row, col = t_preview_win.rowcol(x, y)
-        return col, row
+        return np.array([col, row])
 
     # Plot preview window
     plt.imshow(src.read(1, window=preview_win), cmap='gray', vmin=0, vmax=255)
@@ -109,15 +106,25 @@ for i, v in enumerate(zip(tile_x, tile_y)):
     if not any(map(lambda w: (w[0] >= x and w[0] < (x + tile_size)) and (w[1] >= y and w[1] < (y + tile_size)), waypoints_px)):
         continue
     
-    if not args.preview_only:
+    # Compute center
+    center_lon, center_lat = t_inv.transform(*src.xy(y + (tile_size // 2), x + (tile_size // 2)))
+    
+    # Compute positive box
+    positive_top_left = t_inv.transform(*src.xy(y + (tile_size // 4), x + (tile_size // 4)))
+    positive_bottom_right = t_inv.transform(*src.xy(y + tile_size - (tile_size // 4) - 1, x + tile_size - (tile_size // 4)))
+    positive_lons, positive_lats = zip(*(positive_top_left, positive_bottom_right))
+    positive_lon_range, positive_lat_range = sorted(positive_lons), sorted(positive_lats)
+
+    # Compute semi-positive box
+    semi_lons, semi_lats = zip(*(t_inv.transform(*src.xy(y, x)), t_inv.transform(*src.xy(y + tile_size - 1, x + tile_size - 1))))
+    semi_lon_range, semi_lat_range = sorted(semi_lons), sorted(semi_lats)
+
+    if not args.no_save:
         # Save tile to file
         tile_window = Window(x, y, tile_size, tile_size)
         raster_data = src.read(1, window=tile_window)
-
-        lon_range, lat_range = zip(*(t_inv.transform(*src.xy(y, x)), t_inv.transform(*src.xy(y + tile_size - 1, x + tile_size - 1))))
-        lon_range, lat_range = sorted(lon_range), sorted(lat_range)
         
-        filename = f'{i}_{lat_range[0]}_{lat_range[1]}_{lon_range[0]}_{lon_range[1]}.png'
+        filename = f'{i}_{center_lon}_{center_lat}_{positive_lon_range[0]}_{positive_lat_range[1]}_{positive_lon_range[1]}_{positive_lat_range[0]}_{semi_lon_range[0]}_{semi_lat_range[1]}_{semi_lon_range[1]}_{semi_lat_range[0]}.png'
         
         path = args.output
         if not path.exists():
@@ -130,7 +137,7 @@ for i, v in enumerate(zip(tile_x, tile_y)):
         # Plot tile
         x -= (preview_win_center[0] - (preview_win_size // 2))
         y -= (preview_win_center[1] - (preview_win_size // 2))
-
+        #plt.plot(x + (tile_size // 2), y + (tile_size // 2), linestyle='', marker='X', markersize=5.0, markerfacecolor='white', markeredgecolor='black')
         ax.add_patch(Rectangle((x, y), tile_size, tile_size, fill = False, linewidth = 1, edgecolor = 'white'))
         plt.text(x, y, f'{i}', backgroundcolor = 'white')
 
