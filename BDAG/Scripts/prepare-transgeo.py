@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
 import argparse
+from collections import defaultdict
 from enum import Enum
 import json
 from io import StringIO
 from pathlib import Path
+from pprint import pp
 from random import sample
+import sys
 from zipfile import ZipFile, Path as ZipPath
 
 import numpy as np
@@ -20,10 +23,10 @@ def main():
     parser.add_argument("aerial_root", type=Path, help="Aerial images root")
     parser.add_argument("ground_root", type=Path, help="Ground images root")
     parser.add_argument("geotiff", type=Path, help="GeoTiff")
-    parser.add_argument("-a", "--panorama-aspect-ratio", type=float, default=3.0, help="Minimum aspect ratio for a ground image to be considered a panorama.")
+    parser.add_argument("-a", "--panorama-aspect-ratio", type=float, default=2.0, help="Minimum aspect ratio for a ground image to be considered a panorama.")
     parser.add_argument("-p", "--max-positive-panoramas", type=int, default=2, help="Maximum number of positive panoramas per aerial image.")
-    parser.add_argument("-d", "--distraction-proportion", type=float, default=1.0, help="Proportion of distractions (aerial images covering no panoramas) to keep. 1.0 is 100%.")
-    parser.add_argument("-t", "--train-proportion", type=float, default=0.5, help="Train-test split proportion. 1.0 is 100% train.")
+    parser.add_argument("-d", "--distraction-proportion", type=float, default=1.0, help="Proportion of distractions (aerial images covering no panoramas) to keep. 1.0 is 100%%.")
+    parser.add_argument("-t", "--train-proportion", type=float, default=0.5, help="Traintest split proportion. 1.0 is 100%% train.")
     parser.add_argument("-z", "--zip-prefix", type=Path, default=Path("mars-transgeo"), help="Prefix for all files added to zip.")
     parser.add_argument("-o", "--output", type=Path, default=Path("./mars-transgeo.zip"), help="Output filename")
     args = parser.parse_args()
@@ -76,21 +79,45 @@ def main():
             if aerial_key in ground_item["semi-positive"]:
                 ground_item["semi-positive"].remove(aerial_key)
 
+    # Remove duplicate images
+    image_names = defaultdict(list)
+    for image_key in list(manifest["aerial"].keys()) + list(manifest["ground"].keys()):
+        image_name = Path(image_key).name
+        image_names[image_name].append(image_key)
+    
+    for k, v in filter(lambda x: len(x[1]) > 1, image_names.items()):
+        print(f"Removing {len(v) - 1} duplicate(s) of {k}")
+        for k in v[1:]:
+            if k in manifest["aerial"]:
+                remove_aerial_image(k)
+            elif k in manifest["ground"]:
+                remove_ground_image(k)
+
+    # Remove images with spaces in their names
+    for image_key in list(manifest["aerial"].keys()) + list(manifest["ground"].keys()):
+        name = Path(image_key).name
+        if name.count(" "):
+            print(f"Removing {image_key}")
+            if image_key in manifest["aerial"]:
+                remove_aerial_image(image_key)
+            elif image_key in manifest["ground"]:
+                remove_ground_image(image_key)
+    
     # Remove non-panoramas
     for ground_key, _ in list(filter(lambda x: (x[1]["size"]["w"] / x[1]["size"]["h"]) < args.panorama_aspect_ratio, manifest["ground"].items())):
-        print(f"Removing {ground_key}")
+        print(f"Removing non-panorama {ground_key}")
         remove_ground_image(ground_key)
 
     # Enforce maximum panoramas per aerial
     for aerial_key, aerial_item in manifest["aerial"].items():
-        if len(aerial_item["positive"]) > args.max_positive_panoramas:
+        if args.max_positive_panoramas and len(aerial_item["positive"]) > args.max_positive_panoramas:
             # Pick panoramas
             print(f"Picking panoramas for {aerial_key}")
             panorama_sample = sample(aerial_item["positive"], args.max_positive_panoramas)
             
             # Remove leftover panoramas
             for leftover in list(filter(lambda x: x not in panorama_sample, aerial_item["positive"])):
-                print(f"Removing {leftover}")
+                print(f"Removing leftover panorama {leftover}")
                 remove_ground_image(leftover)
 
             aerial_item["positive"] = panorama_sample
@@ -101,9 +128,11 @@ def main():
     print(f"Removing {remove_count} distractions")
     for x in sample(distractions, remove_count):
         remove_aerial_image(x)
-    
-    # with open("transgeo-manifest.json", "w") as f:
-    #     json.dump(manifest, f, indent=4)
+
+    # Remove ground images with less than 3 semi-positive aerial images
+    for ground_key, _ in list(filter(lambda x: len(x[1]["semi-positive"]) < 3, manifest["ground"].items())):
+        print(f"Removing {ground_key} for having less than 3 semi-positive aerial images")
+        remove_ground_image(ground_key)
 
     # Create zip file
     with ZipFile(args.output, "w") as zf:
@@ -113,7 +142,7 @@ def main():
         for aerial_image in manifest["aerial"].keys():
             aerial_image_path = args.aerial_root / aerial_image
             if not aerial_image_path.exists():
-                print(f"{aerial_image_path} does not exist. Skipping.")
+                print(f"{aerial_image_path} does not exist, skipping")
                 continue
             aerial_images.append(aerial_image)
             zf.write(aerial_image_path, str(args.zip_prefix / "Mars/satellite" / Path(aerial_image).name))
@@ -127,7 +156,7 @@ def main():
         for ground_image in manifest["ground"].keys():
             ground_image_path = args.ground_root / ground_image
             if not ground_image_path.exists():
-                print(f"{ground_image_path} does not exist. Skipping.")
+                print(f"{ground_image_path} does not exist, skipping")
                 continue
             ground_images.append(ground_image)
             zf.write(ground_image_path, str(args.zip_prefix / "Mars/panorama/" / Path(ground_image).name))
@@ -147,7 +176,13 @@ def main():
                     positive_item = manifest["aerial"][positive_aerial]
                     offset_px = ground_aerial_offset_px(*ground_item["location"].values(), *positive_item["center"].values())
                     train_string.write(f"{ground_name} {positive_name} {offset_px[1]} {offset_px[0]}")
-                
+
+                    if len(ground_item["semi-positive"]) < 3:
+                        print(f"{ground_image} has less than 3 semi-positive aerial images, skipping")
+                        continue
+                    elif len(ground_item["semi-positive"]) > 3:
+                        print(f"{ground_image} has more than 3 semi-positive aerial images")
+
                     for semi_positive_aerial in ground_item["semi-positive"][0:3]:
                         semi_positive_name = Path(semi_positive_aerial).name
                         semi_positive_item = manifest["aerial"][semi_positive_aerial]

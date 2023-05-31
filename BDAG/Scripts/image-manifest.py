@@ -46,7 +46,10 @@ for aerial_image_path in aerial_image_directory.glob('*.png'):
         continue
 
     groups = match.groupdict()
-    aerial_item = manifest["aerial"][str(aerial_image_path.relative_to(aerial_image_directory))]
+    aerial_key = str(aerial_image_path.relative_to(aerial_image_directory))
+    if aerial_key in manifest["aerial"]:
+        print(f"Duplicate aerial key: {aerial_key}", file=sys.stderr)
+    aerial_item = manifest["aerial"][aerial_key]
     aerial_item["id"] = groups["id"]
     aerial_item["size"] = dict(zip(("w", "h"), Image.open(aerial_image_path).size))
     aerial_item["center"] = {"lon": groups["center_lon"], "lat": groups["center_lat"]}
@@ -70,11 +73,13 @@ for ground_image_path in ground_image_directory.glob('**/*/*.png'):
     name = ground_image_path.name
     match = ground_label_re.match(name)
     if not match:
-        print(f"{aerial_image_path} does not match aerial image label format. Skipping image.", file=sys.stderr)
+        print(f"{ground_image_path} does not match ground image label format. Skipping image.", file=sys.stderr)
         continue
 
     groups = match.groupdict()
     ground_key = str(ground_image_path.relative_to(ground_image_directory))
+    if ground_key in manifest["ground"]:
+        print(f"Duplicate ground key: {ground_key}", file=sys.stderr)
     ground_item = manifest["ground"][ground_key]
     ground_item["size"] = dict(zip(("w", "h"), Image.open(ground_image_path).size))
     ground_item["location"] = {"lon": groups["lon"], "lat": groups["lat"]}
