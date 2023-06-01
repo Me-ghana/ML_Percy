@@ -162,19 +162,22 @@ def main():
                 continue
             ground_images.append(ground_image)
             zf.write(ground_image_path, str(args.zip_prefix / "Mars/panorama/" / Path(ground_image).name))
-        '''
+        
         # Create list of all sols in dataset of ground images
         sols = []
         for ground_image_sols in manifest["ground"].keys():
             sol_num = int(re.findall('_\d{4}_', ground_image_sols)[0][1:][:-1])
             sols.append(sol_num)
 
-
-        # Randomly remove the sols not used for training
-        sols_in_training = int(len(sols)) * args.train_proportion
+        # Randomly remove a set of sols for testing
+        # Remove duplicate sols
+        sols = [*set(sols)]
+        sols_in_training = int(int(len(sols)) * args.train_proportion)
+        print("Length of sols is {}".format(len(sols)))
+        print("Number of sols in training set are {}".format(sols_in_training))
         random.shuffle(sols)
-        sols = sols[:int(sols_in_training)]
-    
+        sols = sols[:sols_in_training]
+
         # Crate the train set with the images that contain the sols in the list
         train_set = []
         test_set = []
@@ -185,12 +188,9 @@ def main():
             else:
                 test_set.append(ground_image_sols)
 
-        print("The train set has {} images".format(len(train_set)))
-        print("The test set has {} images".format(len(test_set)))
-        '''
         # Splits
-        train_set = set(sample(ground_images, int(len(ground_images) * args.train_proportion)))
-        test_set = set(ground_images) - train_set
+        # train_set = set(sample(ground_images, int(len(ground_images) * args.train_proportion)))
+        # test_set = set(ground_images) - train_set
 
         print("The train set has {} images".format(len(train_set)))
         print("The test set has {} images".format(len(test_set)))
